@@ -9,8 +9,7 @@ function getProjectName() {
 
 function getKeyDirectory(projectName) {
   const homeDir = os.homedir();
-  const keyDir = path.join(homeDir, ".env_keys", projectName);
-  return keyDir;
+  return path.join(homeDir, ".env_keys", projectName);
 }
 
 function loadKey(keyPath) {
@@ -19,13 +18,12 @@ function loadKey(keyPath) {
       "Encryption key not found. Please ensure the key is present."
     );
   }
-  const keyData = JSON.parse(fs.readFileSync(keyPath));
-  return keyData;
+  return JSON.parse(fs.readFileSync(keyPath, "utf8"));
 }
 
 function saveKey(keyData, keyPath) {
   fs.mkdirSync(path.dirname(keyPath), { recursive: true });
-  fs.writeFileSync(keyPath, JSON.stringify(keyData, null, 4));
+  fs.writeFileSync(keyPath, JSON.stringify(keyData, null, 4), { mode: 0o600 });
 }
 
 function generateValidationToken() {
@@ -49,7 +47,7 @@ function encryptFile(filePath, key) {
   let encrypted = cipher.update(data, "utf8", "hex");
   encrypted += cipher.final("hex");
   const result = iv.toString("hex") + ":" + encrypted;
-  fs.writeFileSync(filePath, result);
+  fs.writeFileSync(filePath, result, { mode: 0o600 });
 }
 
 function decryptFile(filePath, key) {
@@ -58,9 +56,8 @@ function decryptFile(filePath, key) {
   }
 
   const data = fs.readFileSync(filePath, "utf8");
-  const parts = data.split(":");
-  const iv = Buffer.from(parts.shift(), "hex");
-  const encryptedText = parts.join(":");
+  const [ivHex, encryptedText] = data.split(":");
+  const iv = Buffer.from(ivHex, "hex");
   const decipher = crypto.createDecipheriv(
     "aes-256-cbc",
     Buffer.from(key, "hex"),
@@ -68,7 +65,7 @@ function decryptFile(filePath, key) {
   );
   let decrypted = decipher.update(encryptedText, "hex", "utf8");
   decrypted += decipher.final("utf8");
-  fs.writeFileSync(filePath, decrypted);
+  fs.writeFileSync(filePath, decrypted, { mode: 0o600 });
 }
 
 function getGitUser() {
@@ -92,26 +89,30 @@ function getGitUser() {
 function validateKey(keyData, metadata) {
   if (keyData.validation_token !== metadata.validation_token) {
     throw new Error(
-      "The encryption key is not compatible with the current .env file."
+      `Validation failed. The key used is not compatible with the metadata. Last encrypted by: ${metadata.last_encrypted_by} at ${metadata.timestamp}`
     );
   }
 }
 
 function updateMetadata(keyPath, rotated = false) {
+  const keyData = loadKey(keyPath);
   const metadata = {
     last_encrypted_by: getGitUser(),
     key_path: keyPath,
     key_status: rotated ? "rotated" : "stable",
-    validation_token: JSON.parse(fs.readFileSync(keyPath)).validation_token,
+    validation_token: keyData.validation_token,
+    timestamp: new Date().toISOString(),
   };
-  fs.writeFileSync(".env.encrypt", JSON.stringify(metadata, null, 4));
+  fs.writeFileSync(".env.encrypt", JSON.stringify(metadata, null, 4), {
+    mode: 0o600,
+  });
 }
 
 function main() {
   const args = process.argv.slice(2);
   if (
     args.length === 0 ||
-    (args[0] !== "encrypt" && args[0] !== "decrypt" && args[0] !== "rotate")
+    !["encrypt", "decrypt", "rotate"].includes(args[0])
   ) {
     console.log("Usage: node encrypt_env.js [encrypt|decrypt|rotate]");
     return;
@@ -141,7 +142,7 @@ function main() {
       console.log("File encrypted and metadata saved.");
     } else if (action === "decrypt") {
       const keyData = loadKey(keyPath);
-      const metadata = JSON.parse(fs.readFileSync(metadataFilePath));
+      const metadata = JSON.parse(fs.readFileSync(metadataFilePath, "utf8"));
       validateKey(keyData, metadata);
 
       decryptFile(envFilePath, keyData.key);
